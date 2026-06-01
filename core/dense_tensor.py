@@ -125,12 +125,12 @@ class DenseTensor:
         Args:
             nested: список
         """
-        if not isinstance(nested, list):
-            raise TypeError("nested должен быть списком")
+        if not isinstance(nested, (list, tuple)):
+            raise TypeError("nested должен быть списком или кортежем")
 
         shape: list[int] = []
         probe = nested
-        while isinstance(probe, list):
+        while isinstance(probe, (list, tuple)):
             if len(probe) == 0:
                 raise ValueError("пустые вложенные списки не поддерживаются")
             shape.append(len(probe))
@@ -145,7 +145,7 @@ class DenseTensor:
                     raise TypeError("элементы nested должны быть числами")
                 return
 
-            if not isinstance(node, list) or len(node) != shape[depth]:
+            if not isinstance(node, (list, tuple)) or len(node) != shape[depth]:
                 raise ValueError("вложенный список должен быть прямоугольным")
             for child in node:
                 _check_rectangular(child, depth + 1)
@@ -156,7 +156,7 @@ class DenseTensor:
         stack = [nested]
         while stack:
             node = stack.pop()
-            if isinstance(node, list):
+            if isinstance(node, (list, tuple)):
                 for child in reversed(node):
                     stack.append(child)
             else:
@@ -330,12 +330,16 @@ class DenseTensor:
         Args:
             other: t2
         """
-        if not isinstance(other, DenseTensor):
+        other_shape = getattr(other, "shape", None)
+        other_data = getattr(other, "data", None)
+        if other_shape is None or other_data is None:
             return NotImplemented
-        check_shapes_match(self.shape, other.shape)
+        check_shapes_match(self.shape, tuple(other_shape))
+        if len(other_data) != self.size:
+            raise ValueError("некорректная длина data у второго тензора")
         data = [0.0] * self.size
         for i in range(self.size):
-            data[i] = self.data[i] + other.data[i]
+            data[i] = self.data[i] + float(other_data[i])
         return DenseTensor(self.shape, data=data)
 
     def __sub__(self, other: DenseTensor) -> DenseTensor:
@@ -345,12 +349,16 @@ class DenseTensor:
         Args:
             other: t2
         """
-        if not isinstance(other, DenseTensor):
+        other_shape = getattr(other, "shape", None)
+        other_data = getattr(other, "data", None)
+        if other_shape is None or other_data is None:
             return NotImplemented
-        check_shapes_match(self.shape, other.shape)
+        check_shapes_match(self.shape, tuple(other_shape))
+        if len(other_data) != self.size:
+            raise ValueError("некорректная длина data у второго тензора")
         data = [0.0] * self.size
         for i in range(self.size):
-            data[i] = self.data[i] - other.data[i]
+            data[i] = self.data[i] - float(other_data[i])
         return DenseTensor(self.shape, data=data)
 
     def __mul__(self, scalar: float | int) -> DenseTensor:
@@ -401,14 +409,18 @@ class DenseTensor:
             atol:  абсолютная погрешность (по умолчанию 1e-8)
             rtol:  относительная погрешность (по умолчанию 1e-5)
         """
-        if not isinstance(other, DenseTensor):
+        other_shape = getattr(other, "shape", None)
+        other_data = getattr(other, "data", None)
+        if other_shape is None or other_data is None:
             return False
-        if self.shape != other.shape:
+        if self.shape != tuple(other_shape):
+            return False
+        if len(other_data) != self.size:
             return False
 
         for i in range(self.size):
             a = self.data[i]
-            b = other.data[i]
+            b = float(other_data[i])
             if abs(a - b) > atol + rtol * max(abs(a), abs(b)):
                 return False
         return True
