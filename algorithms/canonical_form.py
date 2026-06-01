@@ -18,7 +18,37 @@ def left_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
         tt:      исходный тензор
         backend: интерфейс backend
     """
-    pass
+    order = tt.order
+    if order < 2:
+        return tt.copy()
+
+    cores = [backend.copy(core) for core in tt.cores]
+
+    for pos in range(order - 1):
+        core = cores[pos]
+        r_left, mode, r_right = core.shape
+
+        mat = backend.reshape(core, (r_left * mode, r_right))
+        if r_left * mode >= r_right:
+            q_factor, r_factor = backend.qr(mat)
+            next_rank = q_factor.shape[1]
+            cores[pos] = backend.reshape(q_factor, (r_left, mode, next_rank))
+        else:
+            u_factor, s_vec, vt_factor = backend.svd(mat, full_matrices=False)
+            next_rank = s_vec.shape[0]
+            cores[pos] = backend.reshape(u_factor, (r_left, mode, next_rank))
+            r_factor = _multiply_diag_matrix(s_vec, vt_factor, next_rank, backend)
+
+        nxt = cores[pos + 1]
+        nxt_left, nxt_mode, nxt_right = nxt.shape
+        if nxt_left != r_right:
+            raise ValueError("несогласованные размеры при левой каноникализации")
+
+        nxt_mat = backend.reshape(nxt, (r_right, nxt_mode * nxt_right))
+        pushed = backend.matmul(r_factor, nxt_mat)
+        cores[pos + 1] = backend.reshape(pushed, (next_rank, nxt_mode, nxt_right))
+
+    return TTTensor(cores)
 
 
 def right_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
@@ -29,7 +59,40 @@ def right_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
         tt:      исходный тензор
         backend: интерфейс backend
     """
-    pass
+    order = tt.order
+    if order < 2:
+        return tt.copy()
+
+    cores = [backend.copy(core) for core in tt.cores]
+
+    for pos in range(order - 1, 0, -1):
+        core = cores[pos]
+        r_left, mode, r_right = core.shape
+
+        mat = backend.reshape(core, (r_left, mode * r_right))
+        if mode * r_right >= r_left:
+            mat_t = backend.transpose(mat)
+            q_t, r_t = backend.qr(mat_t)
+            q = backend.transpose(q_t)
+            r = backend.transpose(r_t)
+            next_rank = q.shape[0]
+            cores[pos] = backend.reshape(q, (next_rank, mode, r_right))
+        else:
+            u_factor, s_vec, vt_factor = backend.svd(mat, full_matrices=False)
+            next_rank = s_vec.shape[0]
+            cores[pos] = backend.reshape(vt_factor, (next_rank, mode, r_right))
+            r = _multiply_columns_by_diag(u_factor, s_vec, backend)
+
+        prev = cores[pos - 1]
+        prev_left, prev_mode, prev_right = prev.shape
+        if prev_right != r_left:
+            raise ValueError("несогласованные размеры при правой каноникализации")
+
+        prev_mat = backend.reshape(prev, (prev_left * prev_mode, r_left))
+        pushed = backend.matmul(prev_mat, r)
+        cores[pos - 1] = backend.reshape(pushed, (prev_left, prev_mode, next_rank))
+
+    return TTTensor(cores)
 
 
 # ════════════════════════════════════════════════
@@ -53,7 +116,13 @@ def _numerical_rank(
         rel_tol: относительный допуск (по умолчанию 1e-8)
         abs_tol: абсолютный допуск (по умолчанию 1e-12)
     """
-    pass
+    if S.ndim != 1:
+        raise ValueError("S должен быть 1D вектором")
+    if S.size == 0:
+        return 0
+
+    threshold = max(abs_tol, rel_tol * max(abs(x) for x in S.data))
+    return sum(1 for sigma in S.data if abs(sigma) > threshold)
 
 
 def _truncate_columns(
@@ -72,7 +141,18 @@ def _truncate_columns(
         rank:    число сохраняемых столбцов
         backend: интерфейс backend
     """
-    pass
+    if matrix.ndim != 2:
+        raise ValueError("matrix должен быть 2D")
+
+    m, n = matrix.shape
+    if rank < 0 or rank > n:
+        raise ValueError(f"rank должен быть в диапазоне [0, {n}]")
+
+    out = backend.zeros((m, rank))
+    for i in range(m):
+        for j in range(rank):
+            out[i, j] = matrix[i, j]
+    return out
 
 
 def _truncate_rows(
@@ -88,7 +168,18 @@ def _truncate_rows(
         rank:    число сохраняемых строк
         backend: интерфейс backend
     """
-    pass
+    if matrix.ndim != 2:
+        raise ValueError("matrix должен быть 2D")
+
+    k, n = matrix.shape
+    if rank < 0 or rank > k:
+        raise ValueError(f"rank должен быть в диапазоне [0, {k}]")
+
+    out = backend.zeros((rank, n))
+    for i in range(rank):
+        for j in range(n):
+            out[i, j] = matrix[i, j]
+    return out
 
 
 def _truncate_vector(
@@ -104,7 +195,17 @@ def _truncate_vector(
         rank:    число сохраняемых элементов
         backend: интерфейс backend
     """
-    pass
+    if vector.ndim != 1:
+        raise ValueError("vector должен быть 1D")
+
+    k = vector.shape[0]
+    if rank < 0 or rank > k:
+        raise ValueError(f"rank должен быть в диапазоне [0, {k}]")
+
+    out = backend.zeros((rank,))
+    for i in range(rank):
+        out[i] = vector[i]
+    return out
 
 
 def _multiply_diag_matrix(
@@ -123,7 +224,23 @@ def _multiply_diag_matrix(
         rank:     длина диагонального вектора
         backend:  интерфейс backend
     """
-    pass
+    if diag_vec.ndim != 1:
+        raise ValueError("diag_vec должен быть 1D")
+    if matrix.ndim != 2:
+        raise ValueError("matrix должен быть 2D")
+
+    if diag_vec.shape[0] < rank:
+        raise ValueError("rank превышает длину diag_vec")
+    if matrix.shape[0] < rank:
+        raise ValueError("число строк matrix должно быть >= rank")
+
+    _, n = matrix.shape
+    out = backend.zeros((rank, n))
+    for i in range(rank):
+        scale = diag_vec[i]
+        for j in range(n):
+            out[i, j] = scale * matrix[i, j]
+    return out
 
 
 def _multiply_columns_by_diag(
@@ -140,4 +257,17 @@ def _multiply_columns_by_diag(
         diag_vec: одномерный тензор формы (rank,), содержащий диагональные элементы
         backend:  интерфейс backend
     """
-    pass
+    if matrix.ndim != 2:
+        raise ValueError("matrix должен быть 2D")
+    if diag_vec.ndim != 1:
+        raise ValueError("diag_vec должен быть 1D")
+
+    m, n = matrix.shape
+    if diag_vec.shape[0] != n:
+        raise ValueError("длина diag_vec должна совпадать с числом столбцов matrix")
+
+    out = backend.zeros((m, n))
+    for i in range(m):
+        for j in range(n):
+            out[i, j] = matrix[i, j] * diag_vec[j]
+    return out
