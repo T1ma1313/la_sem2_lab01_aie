@@ -18,7 +18,38 @@ def left_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
         tt:      исходный тензор
         backend: интерфейс backend
     """
-    pass
+    order = tt.order
+    if order < 2:
+        return tt.copy()
+
+    canonical_cores = [backend.copy(core) for core in tt.cores]
+
+    for idx in range(order - 1):
+        current = canonical_cores[idx]
+        left_rank, mode_size, right_rank = current.shape
+
+        mat = backend.reshape(current, (left_rank * mode_size, right_rank))
+        U, S, Vt = backend.svd(mat, full_matrices=False)
+
+        new_rank = max(1, _numerical_rank(S))
+
+        U_trunc = _truncate_columns(U, new_rank, backend)
+        canonical_cores[idx] = backend.reshape(U_trunc, (left_rank, mode_size, new_rank))
+
+        s_cut = _truncate_vector(S, new_rank, backend)
+        vt_cut = _truncate_rows(Vt, new_rank, backend)
+        transfer = _multiply_diag_matrix(s_cut, vt_cut, new_rank, backend)
+
+        nxt = canonical_cores[idx + 1]
+        nxt_left, nxt_mode, nxt_right = nxt.shape
+        if nxt_left != right_rank:
+            raise ValueError("несогласованные размеры при левой каноникализации")
+
+        nxt_mat = backend.reshape(nxt, (right_rank, nxt_mode * nxt_right))
+        propagated = backend.matmul(transfer, nxt_mat)
+        canonical_cores[idx + 1] = backend.reshape(propagated, (new_rank, nxt_mode, nxt_right))
+
+    return TTTensor(canonical_cores)
 
 
 def right_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
@@ -29,7 +60,38 @@ def right_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
         tt:      исходный тензор
         backend: интерфейс backend
     """
-    pass
+    order = tt.order
+    if order < 2:
+        return tt.copy()
+
+    canonical_cores = [backend.copy(core) for core in tt.cores]
+
+    for idx in range(order - 1, 0, -1):
+        current = canonical_cores[idx]
+        left_rank, mode_size, right_rank = current.shape
+
+        mat = backend.reshape(current, (left_rank, mode_size * right_rank))
+        U, S, Vt = backend.svd(mat, full_matrices=False)
+
+        new_rank = max(1, _numerical_rank(S))
+
+        U_trunc = _truncate_columns(U, new_rank, backend)
+        Vt_trunc = _truncate_rows(Vt, new_rank, backend)
+        S_trunc = _truncate_vector(S, new_rank, backend)
+
+        canonical_cores[idx] = backend.reshape(Vt_trunc, (new_rank, mode_size, right_rank))
+        transfer = _multiply_columns_by_diag(U_trunc, S_trunc, backend)
+
+        prev = canonical_cores[idx - 1]
+        prev_left, prev_mode, prev_right = prev.shape
+        if prev_right != left_rank:
+            raise ValueError("несогласованные размеры при правой каноникализации")
+
+        prev_mat = backend.reshape(prev, (prev_left * prev_mode, left_rank))
+        propagated = backend.matmul(prev_mat, transfer)
+        canonical_cores[idx - 1] = backend.reshape(propagated, (prev_left, prev_mode, new_rank))
+
+    return TTTensor(canonical_cores)
 
 
 # ════════════════════════════════════════════════
@@ -53,7 +115,13 @@ def _numerical_rank(
         rel_tol: относительный допуск (по умолчанию 1e-8)
         abs_tol: абсолютный допуск (по умолчанию 1e-12)
     """
-    pass
+    if S.ndim != 1:
+        raise ValueError("S должен быть 1D вектором")
+    if S.size == 0:
+        return 0
+
+    threshold = max(abs_tol, rel_tol * max(abs(x) for x in S.data))
+    return sum(1 for sigma in S.data if abs(sigma) > threshold)
 
 
 def _truncate_columns(
@@ -72,7 +140,21 @@ def _truncate_columns(
         rank:    число сохраняемых столбцов
         backend: интерфейс backend
     """
-    pass
+    if matrix.ndim != 2:
+        raise ValueError("matrix должен быть 2D")
+
+    m, n = matrix.shape
+    if rank < 0 or rank > n:
+        raise ValueError(f"rank должен быть в диапазоне [0, {n}]")
+
+    if rank == 0:
+        return backend.zeros((m, 0))
+
+    out_data: list[float] = []
+    for row in range(m):
+        offset = row * n
+        out_data.extend(matrix.data[offset:offset + rank])
+    return DenseTensor((m, rank), data=out_data)
 
 
 def _truncate_rows(
@@ -88,7 +170,17 @@ def _truncate_rows(
         rank:    число сохраняемых строк
         backend: интерфейс backend
     """
-    pass
+    if matrix.ndim != 2:
+        raise ValueError("matrix должен быть 2D")
+
+    k, n = matrix.shape
+    if rank < 0 or rank > k:
+        raise ValueError(f"rank должен быть в диапазоне [0, {k}]")
+
+    if rank == 0:
+        return backend.zeros((0, n))
+
+    return DenseTensor((rank, n), data=matrix.data[:rank * n].copy())
 
 
 def _truncate_vector(
@@ -104,7 +196,14 @@ def _truncate_vector(
         rank:    число сохраняемых элементов
         backend: интерфейс backend
     """
-    pass
+    if vector.ndim != 1:
+        raise ValueError("vector должен быть 1D")
+
+    k = vector.shape[0]
+    if rank < 0 or rank > k:
+        raise ValueError(f"rank должен быть в диапазоне [0, {k}]")
+
+    return DenseTensor((rank,), data=vector.data[:rank].copy())
 
 
 def _multiply_diag_matrix(
@@ -123,7 +222,19 @@ def _multiply_diag_matrix(
         rank:     длина диагонального вектора
         backend:  интерфейс backend
     """
-    pass
+    if diag_vec.ndim != 1:
+        raise ValueError("diag_vec должен быть 1D")
+    if matrix.ndim != 2:
+        raise ValueError("matrix должен быть 2D")
+
+    if diag_vec.shape[0] < rank:
+        raise ValueError("rank превышает длину diag_vec")
+    if matrix.shape[0] < rank:
+        raise ValueError("число строк matrix должно быть >= rank")
+
+    cut_diag = _truncate_vector(diag_vec, rank, backend)
+    cut_matrix = _truncate_rows(matrix, rank, backend)
+    return backend.matmul(backend.diag(cut_diag), cut_matrix)
 
 
 def _multiply_columns_by_diag(
@@ -140,4 +251,13 @@ def _multiply_columns_by_diag(
         diag_vec: одномерный тензор формы (rank,), содержащий диагональные элементы
         backend:  интерфейс backend
     """
-    pass
+    if matrix.ndim != 2:
+        raise ValueError("matrix должен быть 2D")
+    if diag_vec.ndim != 1:
+        raise ValueError("diag_vec должен быть 1D")
+
+    m, n = matrix.shape
+    if diag_vec.shape[0] != n:
+        raise ValueError("длина diag_vec должна совпадать с числом столбцов matrix")
+
+    return backend.matmul(matrix, backend.diag(diag_vec))
