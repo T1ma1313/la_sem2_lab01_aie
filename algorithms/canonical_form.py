@@ -70,7 +70,6 @@ def right_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
         r_left, mode, r_right = core.shape
 
         mat = backend.reshape(core, (r_left, mode * r_right))
-        use_triangular_push = False
         if mode * r_right >= r_left:
             mat_t = backend.transpose(mat)
             q_t, r_t = backend.qr(mat_t)
@@ -78,7 +77,6 @@ def right_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
             r = backend.transpose(r_t)
             next_rank = q.shape[0]
             cores[pos] = backend.reshape(q, (next_rank, mode, r_right))
-            use_triangular_push = True
         else:
             u_factor, s_vec, vt_factor = backend.svd(mat, full_matrices=False)
             next_rank = s_vec.shape[0]
@@ -91,10 +89,7 @@ def right_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
             raise ValueError("несогласованные размеры при правой каноникализации")
 
         prev_mat = backend.reshape(prev, (prev_left * prev_mode, r_left))
-        if use_triangular_push:
-            pushed = _matmul_with_lower_triangular(prev_mat, r, backend)
-        else:
-            pushed = backend.matmul(prev_mat, r)
+        pushed = backend.matmul(prev_mat, r)
         cores[pos - 1] = backend.reshape(pushed, (prev_left, prev_mode, next_rank))
 
     return TTTensor(cores)
@@ -275,41 +270,4 @@ def _multiply_columns_by_diag(
     for i in range(m):
         for j in range(n):
             out[i, j] = matrix[i, j] * diag_vec[j]
-    return out
-
-
-def _matmul_with_lower_triangular(
-    left: DenseTensor,
-    lower_tri: DenseTensor,
-    backend: BackendInterface
-) -> DenseTensor:
-    """
-    Умножает матрицу на нижнетреугольную матрицу справа:
-        left @ lower_tri
-
-    Для уменьшения накопления ошибки использует суммирование Kahan.
-    """
-    if left.ndim != 2 or lower_tri.ndim != 2:
-        raise ValueError("ожидаются 2D матрицы")
-
-    m, k = left.shape
-    k2, n = lower_tri.shape
-    if k != k2:
-        raise ValueError("несогласованные размеры матриц")
-    if k2 != n:
-        raise ValueError("правая матрица должна быть квадратной")
-
-    out = backend.zeros((m, n))
-    for i in range(m):
-        for j in range(n):
-            # Для нижнетреугольной матрицы элементы выше диагонали равны 0.
-            start = j
-            acc = 0.0
-            comp = 0.0
-            for t in range(start, k):
-                y = left[i, t] * lower_tri[t, j] - comp
-                tmp = acc + y
-                comp = (tmp - acc) - y
-                acc = tmp
-            out[i, j] = acc
     return out
