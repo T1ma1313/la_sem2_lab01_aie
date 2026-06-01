@@ -236,7 +236,7 @@ def svd(
     n: int
     m, n = matrix.shape
     k: int = min(m, n)
-    tol: float = 1e-14
+    tol: float = 1e-12
 
     A: list[list[float]] = _to_list_of_rows(matrix, m, n)
 
@@ -449,7 +449,7 @@ def _jacobi_eigen_symmetric(
     ]
 
     if max_iter is None:
-        max_iter = 400 * n * n
+        max_iter = 100 * n * n
 
     for _ in range(max_iter):
         p: int = 0

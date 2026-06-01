@@ -40,16 +40,11 @@ def left_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
         if nxt_left != right_rank:
             raise ValueError("несогласованные размеры при левой каноникализации")
 
-        updated_next = backend.zeros((new_rank, nxt_mode, nxt_right))
-        for i_next in range(nxt_mode):
-            for a in range(new_rank):
-                for b in range(nxt_right):
-                    acc = 0.0
-                    for t in range(right_rank):
-                        acc += transfer[a, t] * nxt[t, i_next, b]
-                    updated_next[a, i_next, b] = acc
-
-        canonical_cores[idx + 1] = updated_next
+        nxt_matrix = backend.reshape(nxt, (right_rank, nxt_mode * nxt_right))
+        contracted = backend.matmul(transfer, nxt_matrix)
+        canonical_cores[idx + 1] = backend.reshape(
+            contracted, (new_rank, nxt_mode, nxt_right)
+        )
 
     return TTTensor(canonical_cores)
 
@@ -84,16 +79,11 @@ def right_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
         if prev_right != left_rank:
             raise ValueError("несогласованные размеры при правой каноникализации")
 
-        updated_prev = backend.zeros((prev_left, prev_mode, new_rank))
-        for i_prev in range(prev_mode):
-            for a in range(prev_left):
-                for b in range(new_rank):
-                    acc = 0.0
-                    for t in range(left_rank):
-                        acc += prev[a, i_prev, t] * transfer[t, b]
-                    updated_prev[a, i_prev, b] = acc
-
-        canonical_cores[idx - 1] = updated_prev
+        prev_matrix = backend.reshape(prev, (prev_left * prev_mode, left_rank))
+        contracted = backend.matmul(prev_matrix, transfer)
+        canonical_cores[idx - 1] = backend.reshape(
+            contracted, (prev_left, prev_mode, new_rank)
+        )
 
     return TTTensor(canonical_cores)
 
@@ -274,3 +264,4 @@ def _multiply_columns_by_diag(
         for j in range(n):
             out[i, j] = matrix[i, j] * diag_vec[j]
     return out
+
