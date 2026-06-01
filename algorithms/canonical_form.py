@@ -30,15 +30,10 @@ def left_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
 
         mat = backend.reshape(current, (left_rank * mode_size, right_rank))
         U, S, Vt = backend.svd(mat, full_matrices=False)
-
         new_rank = S.shape[0]
 
-        U_trunc = _truncate_columns(U, new_rank, backend)
-        canonical_cores[idx] = backend.reshape(U_trunc, (left_rank, mode_size, new_rank))
-
-        s_cut = _truncate_vector(S, new_rank, backend)
-        vt_cut = _truncate_rows(Vt, new_rank, backend)
-        transfer = _multiply_diag_matrix(s_cut, vt_cut, new_rank, backend)
+        canonical_cores[idx] = backend.reshape(U, (left_rank, mode_size, new_rank))
+        transfer = _multiply_diag_matrix(S, Vt, new_rank, backend)
 
         nxt = canonical_cores[idx + 1]
         nxt_left, nxt_mode, nxt_right = nxt.shape
@@ -79,15 +74,10 @@ def right_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
 
         mat = backend.reshape(current, (left_rank, mode_size * right_rank))
         U, S, Vt = backend.svd(mat, full_matrices=False)
-
         new_rank = S.shape[0]
 
-        U_trunc = _truncate_columns(U, new_rank, backend)
-        Vt_trunc = _truncate_rows(Vt, new_rank, backend)
-        S_trunc = _truncate_vector(S, new_rank, backend)
-
-        canonical_cores[idx] = backend.reshape(Vt_trunc, (new_rank, mode_size, right_rank))
-        transfer = _multiply_columns_by_diag(U_trunc, S_trunc, backend)
+        canonical_cores[idx] = backend.reshape(Vt, (new_rank, mode_size, right_rank))
+        transfer = _multiply_columns_by_diag(U, S, backend)
 
         prev = canonical_cores[idx - 1]
         prev_left, prev_mode, prev_right = prev.shape
