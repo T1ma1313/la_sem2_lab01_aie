@@ -31,7 +31,7 @@ def left_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
         mat = backend.reshape(current, (left_rank * mode_size, right_rank))
         U, S, Vt = backend.svd(mat, full_matrices=False)
 
-        new_rank = max(1, _numerical_rank(S))
+        new_rank = S.shape[0]
 
         U_trunc = _truncate_columns(U, new_rank, backend)
         canonical_cores[idx] = backend.reshape(U_trunc, (left_rank, mode_size, new_rank))
@@ -80,7 +80,7 @@ def right_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
         mat = backend.reshape(current, (left_rank, mode_size * right_rank))
         U, S, Vt = backend.svd(mat, full_matrices=False)
 
-        new_rank = max(1, _numerical_rank(S))
+        new_rank = S.shape[0]
 
         U_trunc = _truncate_columns(U, new_rank, backend)
         Vt_trunc = _truncate_rows(Vt, new_rank, backend)
