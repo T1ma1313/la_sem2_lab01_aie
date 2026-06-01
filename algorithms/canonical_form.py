@@ -29,10 +29,15 @@ def left_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
         r_left, mode, r_right = core.shape
 
         mat = backend.reshape(core, (r_left * mode, r_right))
-        q_factor, r_factor = backend.qr(mat)
-        next_rank = q_factor.shape[1]
-
-        cores[pos] = backend.reshape(q_factor, (r_left, mode, next_rank))
+        if r_left * mode >= r_right:
+            q_factor, r_factor = backend.qr(mat)
+            next_rank = q_factor.shape[1]
+            cores[pos] = backend.reshape(q_factor, (r_left, mode, next_rank))
+        else:
+            u_factor, s_vec, vt_factor = backend.svd(mat, full_matrices=False)
+            next_rank = s_vec.shape[0]
+            cores[pos] = backend.reshape(u_factor, (r_left, mode, next_rank))
+            r_factor = _multiply_diag_matrix(s_vec, vt_factor, next_rank, backend)
 
         nxt = cores[pos + 1]
         nxt_left, nxt_mode, nxt_right = nxt.shape
@@ -65,13 +70,20 @@ def right_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
         r_left, mode, r_right = core.shape
 
         mat = backend.reshape(core, (r_left, mode * r_right))
-        mat_t = backend.transpose(mat)
-        q_t, r_t = backend.qr(mat_t)
-
-        q = backend.transpose(q_t)
-        r = backend.transpose(r_t)
-        next_rank = q.shape[0]
-        cores[pos] = backend.reshape(q, (next_rank, mode, r_right))
+        use_triangular_push = False
+        if mode * r_right >= r_left:
+            mat_t = backend.transpose(mat)
+            q_t, r_t = backend.qr(mat_t)
+            q = backend.transpose(q_t)
+            r = backend.transpose(r_t)
+            next_rank = q.shape[0]
+            cores[pos] = backend.reshape(q, (next_rank, mode, r_right))
+            use_triangular_push = True
+        else:
+            u_factor, s_vec, vt_factor = backend.svd(mat, full_matrices=False)
+            next_rank = s_vec.shape[0]
+            cores[pos] = backend.reshape(vt_factor, (next_rank, mode, r_right))
+            r = _multiply_columns_by_diag(u_factor, s_vec, backend)
 
         prev = cores[pos - 1]
         prev_left, prev_mode, prev_right = prev.shape
@@ -79,7 +91,10 @@ def right_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
             raise ValueError("несогласованные размеры при правой каноникализации")
 
         prev_mat = backend.reshape(prev, (prev_left * prev_mode, r_left))
-        pushed = _matmul_with_lower_triangular(prev_mat, r, backend)
+        if use_triangular_push:
+            pushed = _matmul_with_lower_triangular(prev_mat, r, backend)
+        else:
+            pushed = backend.matmul(prev_mat, r)
         cores[pos - 1] = backend.reshape(pushed, (prev_left, prev_mode, next_rank))
 
     return TTTensor(cores)
