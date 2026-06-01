@@ -45,9 +45,16 @@ def left_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
         if nxt_left != right_rank:
             raise ValueError("несогласованные размеры при левой каноникализации")
 
-        nxt_mat = backend.reshape(nxt, (right_rank, nxt_mode * nxt_right))
-        propagated = backend.matmul(transfer, nxt_mat)
-        canonical_cores[idx + 1] = backend.reshape(propagated, (new_rank, nxt_mode, nxt_right))
+        updated_next = backend.zeros((new_rank, nxt_mode, nxt_right))
+        for i_next in range(nxt_mode):
+            for a in range(new_rank):
+                for b in range(nxt_right):
+                    acc = 0.0
+                    for t in range(right_rank):
+                        acc += transfer[a, t] * nxt[t, i_next, b]
+                    updated_next[a, i_next, b] = acc
+
+        canonical_cores[idx + 1] = updated_next
 
     return TTTensor(canonical_cores)
 
@@ -87,9 +94,16 @@ def right_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
         if prev_right != left_rank:
             raise ValueError("несогласованные размеры при правой каноникализации")
 
-        prev_mat = backend.reshape(prev, (prev_left * prev_mode, left_rank))
-        propagated = backend.matmul(prev_mat, transfer)
-        canonical_cores[idx - 1] = backend.reshape(propagated, (prev_left, prev_mode, new_rank))
+        updated_prev = backend.zeros((prev_left, prev_mode, new_rank))
+        for i_prev in range(prev_mode):
+            for a in range(prev_left):
+                for b in range(new_rank):
+                    acc = 0.0
+                    for t in range(left_rank):
+                        acc += prev[a, i_prev, t] * transfer[t, b]
+                    updated_prev[a, i_prev, b] = acc
+
+        canonical_cores[idx - 1] = updated_prev
 
     return TTTensor(canonical_cores)
 
@@ -232,9 +246,13 @@ def _multiply_diag_matrix(
     if matrix.shape[0] < rank:
         raise ValueError("число строк matrix должно быть >= rank")
 
-    cut_diag = _truncate_vector(diag_vec, rank, backend)
-    cut_matrix = _truncate_rows(matrix, rank, backend)
-    return backend.matmul(backend.diag(cut_diag), cut_matrix)
+    _, n = matrix.shape
+    out = backend.zeros((rank, n))
+    for i in range(rank):
+        scale = diag_vec[i]
+        for j in range(n):
+            out[i, j] = scale * matrix[i, j]
+    return out
 
 
 def _multiply_columns_by_diag(
@@ -260,4 +278,8 @@ def _multiply_columns_by_diag(
     if diag_vec.shape[0] != n:
         raise ValueError("длина diag_vec должна совпадать с числом столбцов matrix")
 
-    return backend.matmul(matrix, backend.diag(diag_vec))
+    out = backend.zeros((m, n))
+    for i in range(m):
+        for j in range(n):
+            out[i, j] = matrix[i, j] * diag_vec[j]
+    return out
