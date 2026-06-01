@@ -161,14 +161,11 @@ def _truncate_columns(
     if rank < 0 or rank > n:
         raise ValueError(f"rank должен быть в диапазоне [0, {n}]")
 
-    if rank == 0:
-        return backend.zeros((m, 0))
-
-    out_data: list[float] = []
-    for row in range(m):
-        offset = row * n
-        out_data.extend(matrix.data[offset:offset + rank])
-    return DenseTensor((m, rank), data=out_data)
+    out = backend.zeros((m, rank))
+    for i in range(m):
+        for j in range(rank):
+            out[i, j] = matrix[i, j]
+    return out
 
 
 def _truncate_rows(
@@ -191,10 +188,11 @@ def _truncate_rows(
     if rank < 0 or rank > k:
         raise ValueError(f"rank должен быть в диапазоне [0, {k}]")
 
-    if rank == 0:
-        return backend.zeros((0, n))
-
-    return DenseTensor((rank, n), data=matrix.data[:rank * n].copy())
+    out = backend.zeros((rank, n))
+    for i in range(rank):
+        for j in range(n):
+            out[i, j] = matrix[i, j]
+    return out
 
 
 def _truncate_vector(
@@ -217,7 +215,10 @@ def _truncate_vector(
     if rank < 0 or rank > k:
         raise ValueError(f"rank должен быть в диапазоне [0, {k}]")
 
-    return DenseTensor((rank,), data=vector.data[:rank].copy())
+    out = backend.zeros((rank,))
+    for i in range(rank):
+        out[i] = vector[i]
+    return out
 
 
 def _multiply_diag_matrix(
