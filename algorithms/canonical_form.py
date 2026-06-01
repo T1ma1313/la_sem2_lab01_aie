@@ -22,31 +22,28 @@ def left_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
     if order < 2:
         return tt.copy()
 
-    canonical_cores = [backend.copy(core) for core in tt.cores]
+    cores = [backend.copy(core) for core in tt.cores]
 
-    for idx in range(order - 1):
-        current = canonical_cores[idx]
-        left_rank, mode_size, right_rank = current.shape
+    for pos in range(order - 1):
+        core = cores[pos]
+        r_left, mode, r_right = core.shape
 
-        mat = backend.reshape(current, (left_rank * mode_size, right_rank))
-        U, S, Vt = backend.svd(mat, full_matrices=False)
-        new_rank = S.shape[0]
+        mat = backend.reshape(core, (r_left * mode, r_right))
+        q_factor, r_factor = backend.qr(mat)
+        next_rank = q_factor.shape[1]
 
-        canonical_cores[idx] = backend.reshape(U, (left_rank, mode_size, new_rank))
-        transfer = _multiply_diag_matrix(S, Vt, new_rank, backend)
+        cores[pos] = backend.reshape(q_factor, (r_left, mode, next_rank))
 
-        nxt = canonical_cores[idx + 1]
+        nxt = cores[pos + 1]
         nxt_left, nxt_mode, nxt_right = nxt.shape
-        if nxt_left != right_rank:
+        if nxt_left != r_right:
             raise ValueError("несогласованные размеры при левой каноникализации")
 
-        nxt_matrix = backend.reshape(nxt, (right_rank, nxt_mode * nxt_right))
-        contracted = backend.matmul(transfer, nxt_matrix)
-        canonical_cores[idx + 1] = backend.reshape(
-            contracted, (new_rank, nxt_mode, nxt_right)
-        )
+        nxt_mat = backend.reshape(nxt, (r_right, nxt_mode * nxt_right))
+        pushed = backend.matmul(r_factor, nxt_mat)
+        cores[pos + 1] = backend.reshape(pushed, (next_rank, nxt_mode, nxt_right))
 
-    return TTTensor(canonical_cores)
+    return TTTensor(cores)
 
 
 def right_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
@@ -61,31 +58,31 @@ def right_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
     if order < 2:
         return tt.copy()
 
-    canonical_cores = [backend.copy(core) for core in tt.cores]
+    cores = [backend.copy(core) for core in tt.cores]
 
-    for idx in range(order - 1, 0, -1):
-        current = canonical_cores[idx]
-        left_rank, mode_size, right_rank = current.shape
+    for pos in range(order - 1, 0, -1):
+        core = cores[pos]
+        r_left, mode, r_right = core.shape
 
-        mat = backend.reshape(current, (left_rank, mode_size * right_rank))
-        U, S, Vt = backend.svd(mat, full_matrices=False)
-        new_rank = S.shape[0]
+        mat = backend.reshape(core, (r_left, mode * r_right))
+        mat_t = backend.transpose(mat)
+        q_t, r_t = backend.qr(mat_t)
 
-        canonical_cores[idx] = backend.reshape(Vt, (new_rank, mode_size, right_rank))
-        transfer = _multiply_columns_by_diag(U, S, backend)
+        q = backend.transpose(q_t)
+        r = backend.transpose(r_t)
+        next_rank = q.shape[0]
+        cores[pos] = backend.reshape(q, (next_rank, mode, r_right))
 
-        prev = canonical_cores[idx - 1]
+        prev = cores[pos - 1]
         prev_left, prev_mode, prev_right = prev.shape
-        if prev_right != left_rank:
+        if prev_right != r_left:
             raise ValueError("несогласованные размеры при правой каноникализации")
 
-        prev_matrix = backend.reshape(prev, (prev_left * prev_mode, left_rank))
-        contracted = backend.matmul(prev_matrix, transfer)
-        canonical_cores[idx - 1] = backend.reshape(
-            contracted, (prev_left, prev_mode, new_rank)
-        )
+        prev_mat = backend.reshape(prev, (prev_left * prev_mode, r_left))
+        pushed = _matmul_with_lower_triangular(prev_mat, r, backend)
+        cores[pos - 1] = backend.reshape(pushed, (prev_left, prev_mode, next_rank))
 
-    return TTTensor(canonical_cores)
+    return TTTensor(cores)
 
 
 # ════════════════════════════════════════════════
@@ -265,3 +262,39 @@ def _multiply_columns_by_diag(
             out[i, j] = matrix[i, j] * diag_vec[j]
     return out
 
+
+def _matmul_with_lower_triangular(
+    left: DenseTensor,
+    lower_tri: DenseTensor,
+    backend: BackendInterface
+) -> DenseTensor:
+    """
+    Умножает матрицу на нижнетреугольную матрицу справа:
+        left @ lower_tri
+
+    Для уменьшения накопления ошибки использует суммирование Kahan.
+    """
+    if left.ndim != 2 or lower_tri.ndim != 2:
+        raise ValueError("ожидаются 2D матрицы")
+
+    m, k = left.shape
+    k2, n = lower_tri.shape
+    if k != k2:
+        raise ValueError("несогласованные размеры матриц")
+    if k2 != n:
+        raise ValueError("правая матрица должна быть квадратной")
+
+    out = backend.zeros((m, n))
+    for i in range(m):
+        for j in range(n):
+            # Для нижнетреугольной матрицы элементы выше диагонали равны 0.
+            start = j
+            acc = 0.0
+            comp = 0.0
+            for t in range(start, k):
+                y = left[i, t] * lower_tri[t, j] - comp
+                tmp = acc + y
+                comp = (tmp - acc) - y
+                acc = tmp
+            out[i, j] = acc
+    return out
